@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>天气查询</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="app-header">
+            <h1>🌤 天气查询</h1>
+        </header>
+
+        <!-- Search -->
+        <form id="search-form" class="search-box">
+            <input
+                type="text"
+                id="city-input"
+                placeholder="输入城市名（如：北京、东京、London）…"
+                autocomplete="off"
+                required
+            />
+            <button type="submit" id="search-btn">查询</button>
+        </form>
+
+        <!-- Locate status (auto-detecting location) -->
+        <div id="locate-status" class="locate-status"></div>
+
+        <!-- Error -->
+        <div id="error" class="error-box"></div>
+
+        <!-- Loading -->
+        <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <p>正在获取天气数据…</p>
+        </div>
+
+        <!-- Current Weather -->
+        <div id="weather-card" class="weather-card">
+            <div class="weather-main">
+                <div>
+                    <span class="weather-city" id="w-city"></span>
+                    <span class="weather-country" id="w-country"></span>
+                </div>
+                <div class="weather-temp-row">
+                    <span class="weather-temp" id="w-temp"></span>
+                    <img id="w-icon" class="weather-icon" src="" alt="" />
+                </div>
+            </div>
+            <div class="weather-desc" id="w-desc"></div>
+
+            <div class="detail-grid">
+                <div class="detail-item">
+                    <div class="label">体感温度</div>
+                    <div class="value" id="w-feels"></div>
+                </div>
+                <div class="detail-item">
+                    <div class="label">湿度</div>
+                    <div class="value" id="w-humidity"></div>
+                </div>
+                <div class="detail-item">
+                    <div class="label">风速</div>
+                    <div class="value" id="w-wind"></div>
+                </div>
+                <div class="detail-item">
+                    <div class="label">气压</div>
+                    <div class="value" id="w-pressure"></div>
+                </div>
+                <div class="detail-item">
+                    <div class="label">能见度</div>
+                    <div class="value" id="w-visibility"></div>
+                </div>
+                <div class="detail-item">
+                    <div class="label">日出</div>
+                    <div class="value" id="w-sunrise"></div>
+                </div>
+                <div class="detail-item">
+                    <div class="label">日落</div>
+                    <div class="value" id="w-sunset"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 5-Day Forecast -->
+        <div id="forecast-section" class="forecast-section">
+            <h2 class="forecast-title">未来天气预报</h2>
+            <div id="forecast-grid" class="forecast-grid"></div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

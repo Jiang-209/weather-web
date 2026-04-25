@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python main.py --help)",
+      "Bash(python -m pip install -r requirements.txt)",
+      "Bash(pip3 install *)",
+      "Bash(python main.py \"London\")",
+      "Bash(pip install *)",
+      "Bash(cp *)",
+      "Bash(PYTHONIOENCODING=utf-8 python main.py \"London\")",
+      "Bash(python main.py \"Beijing\" --units imperial)",
+      "Bash(python main.py)",
+      "Bash(python main.py \"InvalidCityName12345\")",
+      "Bash(python main.py \"Beijing\")",
+      "Bash(python main.py \"Moscow\")",
+      "Bash(python app.py)",
+      "Bash(curl -s http://localhost:5000/)",
+      "Bash(curl -s -X POST http://localhost:5000/api/weather -d \"city=London&units=metric\")",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s -X POST http://localhost:5000/api/weather -d \"city=北京&units=metric\")",
+      "Bash(python -c ' *)",
+      "Bash(curl -s -X POST http://localhost:5000/api/weather -d \"city=Tokyo&units=metric\")",
+      "Bash(curl -s -X POST http://localhost:5000/api/weather --data-urlencode \"city=北京\" --data-urlencode \"units=metric\")",
+      "Bash(curl -s -X POST http://localhost:5000/api/weather --data-urlencode \"city=Beijing\" --data-urlencode \"units=metric\")",
+      "Bash(kill %1)",
+      "Bash(curl -s -X POST http://localhost:5000/api/weather/coords -d \"lat=39.9&lon=116.4&units=metric\")",
+      "Bash(python -c \" import json, sys d = json.load\\(sys.stdin\\) print\\('City:', d['current']['city'], '| Desc:', d['current']['description']\\) print\\('Forecast days:', len\\(d['forecast']\\)\\) \" echo \"=== Test 3: cache \\(same city twice, should be instant\\) ===\" time curl -s -X POST http://localhost:5000/api/weather --data-urlencode \"city=Beijing\" --data-urlencode \"units=metric\" echo \"Cached request done\")"
+    ]
+  }
+}
