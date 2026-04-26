@@ -3,6 +3,7 @@
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
@@ -10,7 +11,12 @@ from flask import Flask, jsonify, render_template, request
 from utils import (fetch_forecast, fetch_forecast_by_coords, fetch_weather,
                    fetch_weather_by_coords)
 
-load_dotenv()
+# Load .env from the project root; fallback to .env.backup
+_base_dir = Path(__file__).resolve().parent
+_dotenv_path = _base_dir / '.env'
+if not _dotenv_path.exists():
+    _dotenv_path = _base_dir / '.env.backup'
+load_dotenv(dotenv_path=_dotenv_path, override=True)
 
 app = Flask(__name__)
 
@@ -72,6 +78,13 @@ def weather_api_by_coords():
 
 
 if __name__ == "__main__":
+    # Debug: show API key status
+    _key = os.getenv("OPENWEATHER_API_KEY", "")
+    if _key:
+        print(f"[weather] Using API key: {_key[:4]}...{_key[-4:]}")
+    else:
+        print("[weather] WARNING: OPENWEATHER_API_KEY is not set")
+
     port = int(os.getenv("PORT", 5000))
     debug = os.getenv("FLASK_DEBUG", "1") == "1"
     app.run(host="0.0.0.0", port=port, debug=debug)

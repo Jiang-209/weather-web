@@ -24,7 +24,10 @@
       "Bash(curl -s -X POST http://localhost:5000/api/weather --data-urlencode \"city=Beijing\" --data-urlencode \"units=metric\")",
       "Bash(kill %1)",
       "Bash(curl -s -X POST http://localhost:5000/api/weather/coords -d \"lat=39.9&lon=116.4&units=metric\")",
-      "Bash(python -c \" import json, sys d = json.load\\(sys.stdin\\) print\\('City:', d['current']['city'], '| Desc:', d['current']['description']\\) print\\('Forecast days:', len\\(d['forecast']\\)\\) \" echo \"=== Test 3: cache \\(same city twice, should be instant\\) ===\" time curl -s -X POST http://localhost:5000/api/weather --data-urlencode \"city=Beijing\" --data-urlencode \"units=metric\" echo \"Cached request done\")"
+      "Bash(python -c \" import json, sys d = json.load\\(sys.stdin\\) print\\('City:', d['current']['city'], '| Desc:', d['current']['description']\\) print\\('Forecast days:', len\\(d['forecast']\\)\\) \" echo \"=== Test 3: cache \\(same city twice, should be instant\\) ===\" time curl -s -X POST http://localhost:5000/api/weather --data-urlencode \"city=Beijing\" --data-urlencode \"units=metric\" echo \"Cached request done\")",
+      "Bash(python -c \"import sys; sys.path.insert\\(0, '.'\\); import utils; print\\('utils.py OK, API_KEY found:', bool\\(utils.load_api_key\\(\\)\\)\\)\")",
+      "Bash(python -c \"import sys; sys.path.insert\\(0, '.'\\); import app; print\\('app.py imports OK'\\)\")",
+      "Bash(timeout 5 python -c ' *)"
     ]
   }
 }

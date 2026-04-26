@@ -168,11 +168,12 @@
      API CALLS
      ================================================================ */
 
-  function fetchWeatherCommon(formData) {
+  function fetchWeatherCommon(formData, endpoint) {
+    if (!endpoint) endpoint = "/api/weather";
     hideError();
     setLoading(true);
 
-    fetch("/api/weather", {
+    fetch(endpoint, {
       method: "POST",
       body: formData,
     })
@@ -197,6 +198,7 @@
       })
       .finally(function () {
         setLoading(false);
+        setLocateStatus("");
       });
   }
 
@@ -212,7 +214,7 @@
     fd.append("lat", lat);
     fd.append("lon", lon);
     fd.append("units", "metric");
-    fetchWeatherCommon(fd);
+    fetchWeatherCommon(fd, "/api/weather/coords");
   }
 
   /* ================================================================

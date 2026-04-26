@@ -5,20 +5,32 @@ Weather API utilities - current weather + 5-day forecast
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List
 from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Load .env from the project root; fallback to .env.backup if .env doesn't exist
+_base_dir = Path(__file__).resolve().parent
+dotenv_path = _base_dir / '.env'
+if not dotenv_path.exists():
+    dotenv_path = _base_dir / '.env.backup'
+load_dotenv(dotenv_path=dotenv_path, override=True)
 
 # API configuration
 API_BASE_URL = "https://api.openweathermap.org/data/2.5/weather"
 FORECAST_BASE_URL = "https://api.openweathermap.org/data/2.5/forecast"
 GEO_BASE_URL = "https://api.openweathermap.org/geo/1.0/direct"
-API_KEY_ENV_VAR = "WEATHER_API_KEY"
+API_KEY_ENV_VAR = "OPENWEATHER_API_KEY"
+
+# Debug: show API key status at startup (masked)
+_key_preview = os.getenv(API_KEY_ENV_VAR, "")
+if _key_preview:
+    print(f"[weather] Loaded API key from {dotenv_path.name}: {_key_preview[:4]}...{_key_preview[-4:]}")
+else:
+    print(f"[weather] No API key found in {dotenv_path.name}")
 
 # ── Chinese → English city name mapping ──────────────────────────
 CITY_NAME_MAP: Dict[str, str] = {
@@ -256,14 +268,55 @@ def resolve_city_name(city: str) -> str:
 def load_api_key() -> str:
     """Load API key from environment variable"""
     api_key = os.getenv(API_KEY_ENV_VAR)
+
     if not api_key:
+        # Retry loading .env (with fallback to .env.backup)
+        _base_dir = Path(__file__).resolve().parent
+        dotenv_path = _base_dir / '.env'
+        if not dotenv_path.exists():
+            dotenv_path = _base_dir / '.env.backup'
+        if dotenv_path.exists():
+            load_dotenv(dotenv_path=dotenv_path, override=True)
+            api_key = os.getenv(API_KEY_ENV_VAR)
+
+    if not api_key:
+        _base_dir = Path(__file__).resolve().parent
+        has_env = (_base_dir / '.env').exists()
+        has_backup = (_base_dir / '.env.backup').exists()
+
+        if not has_env and not has_backup:
+            hint = (
+                "\n  Neither .env nor .env.backup found."
+                "\n  Run:  cp .env.example .env"
+                "\n  Then edit .env and set your API key:"
+                f"\n  {API_KEY_ENV_VAR}=your_api_key_here"
+            )
+        else:
+            hint = (
+                "\n  Found .env file(s) but the API key is missing or empty."
+                f"\n  Make sure your .env or .env.backup contains:"
+                f"\n  {API_KEY_ENV_VAR}=your_api_key_here"
+            )
         raise Exception(
-            f"{API_KEY_ENV_VAR} environment variable not set.\n"
-            "Please create a .env file with your OpenWeatherMap API key:\n"
-            f"{API_KEY_ENV_VAR}=your_api_key_here\n"
+            f"{API_KEY_ENV_VAR} environment variable not set.{hint}\n"
             "Get a free API key at: https://openweathermap.org/api"
         )
     return api_key
+
+
+def _check_api_response(data: dict, context: str = "API"):
+    """Check OpenWeatherMap response for errors, with specific 401 handling."""
+    cod = data.get("cod")
+    if cod and str(cod) != "200":
+        msg = data.get("message", "Unknown error")
+        if str(cod) == "401":
+            raise Exception(
+                "Invalid API key (401).\n"
+                "  Your OpenWeatherMap API key is invalid or has been disabled.\n"
+                "  Check your .env or .env.backup and ensure the API key is correct.\n"
+                "  Get a new key at: https://home.openweathermap.org/api_keys"
+            )
+        raise Exception(f"{context} error: {msg}")
 
 
 def fetch_weather(city: str, units: str = "metric") -> Dict[str, Any]:
@@ -300,9 +353,7 @@ def fetch_weather(city: str, units: str = "metric") -> Dict[str, Any]:
         data = response.json()
 
         # Check for API errors (e.g., city not found, invalid API key)
-        if data.get("cod") and str(data.get("cod")) != "200":
-            error_message = data.get("message", "Unknown error")
-            raise Exception(f"API error: {error_message}")
+        _check_api_response(data)
 
         response.raise_for_status()
         result = parse_weather_data(data, units)
@@ -398,8 +449,7 @@ def fetch_weather_by_coords(lat: float, lon: float, units: str = "metric") -> Di
     try:
         resp = requests.get(API_BASE_URL, params=params, timeout=10)
         data = resp.json()
-        if data.get("cod") and str(data.get("cod")) != "200":
-            raise Exception(f"API error: {data.get('message', 'Unknown error')}")
+        _check_api_response(data)
         resp.raise_for_status()
         result = parse_weather_data(data, units)
         _cache_set(cache_key, result, CACHE_TTL_WEATHER)
@@ -424,8 +474,7 @@ def fetch_forecast_by_coords(lat: float, lon: float, units: str = "metric") -> L
             timeout=10,
         )
         data = resp.json()
-        if data.get("cod") and str(data.get("cod")) != "200":
-            raise Exception(f"Forecast API error: {data.get('message', 'Unknown error')}")
+        _check_api_response(data, context="Forecast")
         resp.raise_for_status()
     except requests.exceptions.RequestException as e:
         raise Exception(f"Network error fetching forecast: {e}")
@@ -458,9 +507,7 @@ def fetch_forecast(city: str, units: str = "metric") -> List[Dict[str, Any]]:
         resp = requests.get(FORECAST_BASE_URL, params=params, timeout=10)
         data = resp.json()
 
-        if data.get("cod") and str(data.get("cod")) != "200":
-            msg = data.get("message", "Unknown error")
-            raise Exception(f"Forecast API error: {msg}")
+        _check_api_response(data, context="Forecast")
 
         resp.raise_for_status()
     except requests.exceptions.RequestException as e:
