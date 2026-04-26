@@ -27,7 +27,17 @@
       "Bash(python -c \" import json, sys d = json.load\\(sys.stdin\\) print\\('City:', d['current']['city'], '| Desc:', d['current']['description']\\) print\\('Forecast days:', len\\(d['forecast']\\)\\) \" echo \"=== Test 3: cache \\(same city twice, should be instant\\) ===\" time curl -s -X POST http://localhost:5000/api/weather --data-urlencode \"city=Beijing\" --data-urlencode \"units=metric\" echo \"Cached request done\")",
       "Bash(python -c \"import sys; sys.path.insert\\(0, '.'\\); import utils; print\\('utils.py OK, API_KEY found:', bool\\(utils.load_api_key\\(\\)\\)\\)\")",
       "Bash(python -c \"import sys; sys.path.insert\\(0, '.'\\); import app; print\\('app.py imports OK'\\)\")",
-      "Bash(timeout 5 python -c ' *)"
+      "Bash(timeout 5 python -c ' *)",
+      "Bash(python3 *)",
+      "Bash(python *)",
+      "WebSearch",
+      "Bash(curl -s -o \"E:/weather-cli/data/china_cities_full.json\" \"https://raw.githubusercontent.com/pfinal/city/main/pca-code.json\")",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/pfinal/city/main/pca-code.json\")",
+      "Bash(curl -sL \"https://api.github.com/repos/pfinal/city/contents/\")",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:xiangyuecn.github.io)",
+      "Bash(curl -sL -o ok_data.7z \"https://github.com/xiangyuecn/AreaCity-JsSpider-StatsGov/releases/download/2025.251231.260403/ok_data_level3-4.csv.7z\")",
+      "Bash(echo \"Replaced: $\\(python -c \"import json; print\\(len\\(json.load\\(open\\('E:/weather-cli/data/china_locations.json','r',encoding='utf-8'\\)\\)\\)\\)\"\\) entries\")"
     ]
   }
 }

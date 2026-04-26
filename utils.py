@@ -163,32 +163,73 @@ try:
 except Exception:
     CHINA_LOCATIONS = []
 
-# Built lazily on first call to find_best_match()
+# Built lazily on first call to find_best_district_match()
 _location_index: Dict[str, int] = {}
 _location_pinyin_idx: Dict[str, int] = {}
 _location_names: List[str] = []
+# District / county-only indexes (separated from city-level entries)
+_district_index: Dict[str, int] = {}
+_district_pinyin_idx: Dict[str, int] = {}     # full pinyin (for fuzzy matching)
+_district_py_exact: Dict[str, int] = {}        # full + stripped pinyin (for exact matching)
+_district_names: List[str] = []
 _built = False
 
 
 def _build_index():
-    """Precompute name→idx and pinyin→idx for O(1) lookup."""
+    """Precompute name→idx and pinyin→idx for O(1) lookup.
+    All entries in china_locations.json are county-level (区/县/县级市/旗),
+    so every entry is indexed as a district.
+    """
     global _built, _location_index, _location_pinyin_idx, _location_names
+    global _district_index, _district_pinyin_idx, _district_py_exact, _district_names
     if _built:
         return
     _location_index.clear()
     _location_pinyin_idx.clear()
     _location_names.clear()
+    _district_index.clear()
+    _district_pinyin_idx.clear()
+    _district_py_exact.clear()
+    _district_names.clear()
+
+    # Pinyin suffixes to strip for exact-match shortcuts
+    # e.g. "pudong" from "pudongxinqu", "linzi" from "linziqu"
+    _py_suffixes = ("xinqu", "xian", "qu", "shi", "zhen", "xiang")
+
     for i, loc in enumerate(CHINA_LOCATIONS):
         n = loc.get("name", "")
-        _location_names.append(n)
-        _location_index[n] = i
-        # Also index the normalized (suffix-stripped) form
         n_norm = normalize_city_name(n)
-        if n_norm != n:
+
+        # Full index (name-based)
+        _location_names.append(n)
+        if n not in _location_index:
+            _location_index[n] = i
+        if n_norm != n and n_norm not in _location_index:
             _location_index[n_norm] = i
-        # Pinyin index
+
+        # District index (all entries are county-level)
+        _district_names.append(n)
+        if n not in _district_index:
+            _district_index[n] = i
+        if n_norm != n and n_norm not in _district_index:
+            _district_index[n_norm] = i
+
+        # Pinyin indices
         py = "".join(lazy_pinyin(n))
-        _location_pinyin_idx[py] = i
+        if py not in _location_pinyin_idx:
+            _location_pinyin_idx[py] = i
+        if py not in _district_pinyin_idx:  # full pinyin (for fuzzy matching)
+            _district_pinyin_idx[py] = i
+        if py not in _district_py_exact:    # full pinyin (for exact matching)
+            _district_py_exact[py] = i
+        # Add suffix-stripped pinyin for exact matching
+        for suffix in _py_suffixes:
+            if py.endswith(suffix) and len(py) > len(suffix):
+                stripped = py[:-len(suffix)]
+                if stripped not in _district_py_exact:
+                    _district_py_exact[stripped] = i
+                break
+
     _built = True
 
 # ── In-memory cache ───────────────────────────────────────────────
@@ -333,15 +374,17 @@ def to_pinyin(text: str) -> str:
     return "".join(lazy_pinyin(text))
 
 
-def find_best_match(user_input: str):
+
+def find_best_district_match(user_input: str):
     """
-    Match user input against the local China locations database.
+    Match user input against local China districts/counties (区/县) only.
     Matches in priority order:
       1) Exact match on name
       2) Contains match (input is substring of name)
       3) Exact match after normalizing input (strip suffix)
-      4) Exact pinyin match
-      5) difflib fuzzy match (cutoff 0.6)
+      4) Exact pinyin match (including suffix-stripped forms)
+      5) difflib fuzzy match against Chinese names (cutoff 0.6)
+      6) difflib fuzzy match against full pinyin (cutoff 0.8)
 
     Returns the matched location dict or None if no match found.
     """
@@ -352,47 +395,44 @@ def find_best_match(user_input: str):
     raw = user_input.strip()
 
     # ① Exact match
-    idx = _location_index.get(raw)
+    idx = _district_index.get(raw)
     if idx is not None:
         return CHINA_LOCATIONS[idx]
 
     # ② Contains match (e.g. "朝阳" in "朝阳区")
-    for i, name in enumerate(_location_names):
+    for name in _district_names:
         if raw in name:
-            return CHINA_LOCATIONS[i]
+            idx = _district_index.get(name)
+            if idx is not None:
+                return CHINA_LOCATIONS[idx]
 
     # ③ Normalized match (strip suffix from input)
     norm = normalize_input(raw)
     if norm != raw:
-        idx = _location_index.get(norm)
+        idx = _district_index.get(norm)
         if idx is not None:
             return CHINA_LOCATIONS[idx]
 
-    # ④ Exact pinyin match
-    input_py = to_pinyin(raw)  # e.g. "chaoyangqu" → "chaoyangqu"
-    input_py_normalized = to_pinyin(norm)  # e.g. "chaoyang"
-    idx = _location_pinyin_idx.get(input_py)
+    # ④ Exact pinyin match (also checks suffix-stripped forms like "pudong" → "pudongxinqu")
+    input_py = to_pinyin(raw)
+    input_py_normalized = to_pinyin(norm)
+    idx = _district_py_exact.get(input_py)
     if idx is None:
-        idx = _location_pinyin_idx.get(input_py_normalized)
+        idx = _district_py_exact.get(input_py_normalized)
     if idx is not None:
         return CHINA_LOCATIONS[idx]
 
-    # ⑤ difflib fuzzy match (try against raw names and pinyin)
-    # Build candidate list: raw name + pinyin for each location
-    candidates = []
-    for name in _location_names:
-        candidates.append(name)
-    close = get_close_matches(raw, candidates, n=1, cutoff=0.6)
+    # ⑤ difflib fuzzy match (against names)
+    close = get_close_matches(raw, _district_names, n=1, cutoff=0.6)
     if close:
-        idx = _location_index.get(close[0])
+        idx = _district_index.get(close[0])
         if idx is not None:
             return CHINA_LOCATIONS[idx]
 
-    # Also try fuzzy against pinyin
-    pinyin_candidates = list(_location_pinyin_idx.keys())
-    close_py = get_close_matches(input_py, pinyin_candidates, n=1, cutoff=0.6)
+    # ⑥ difflib fuzzy match (against full pinyin only, higher cutoff to avoid false matches)
+    close_py = get_close_matches(input_py, list(_district_pinyin_idx.keys()), n=1, cutoff=0.8)
     if close_py:
-        idx = _location_pinyin_idx.get(close_py[0])
+        idx = _district_pinyin_idx.get(close_py[0])
         if idx is not None:
             return CHINA_LOCATIONS[idx]
 
@@ -404,12 +444,7 @@ def find_best_match(user_input: str):
 # Suffixes to strip for district-level matching
 _CITY_SUFFIXES = ("市", "区", "县", "镇", "乡")
 
-# Override wrong OpenWeatherMap mappings (e.g. 临淄 → Linz)
-# Key = user input, Value = correct English city name for the weather API
-SPECIAL_CASES: Dict[str, str] = {
-    "临淄": "Zibo",
-    "临淄区": "Zibo",
-}
+# (Reserved for future special-case overrides if needed)
 
 
 def _is_chinese(text: str) -> bool:
@@ -456,14 +491,10 @@ def _geo_lookup(city: str, api_key: str):
 def resolve_city_name(city: str) -> str:
     """
     Resolve a Chinese city name to its English form.
-    Priority: SPECIAL_CASES > CITY_NAME_MAP > Geocoding API.
+    Priority: CITY_NAME_MAP > Geocoding API fallback.
     """
     if not _is_chinese(city):
         return city
-
-    # 0. Special-case correction (override wrong mappings)
-    if city in SPECIAL_CASES:
-        return SPECIAL_CASES[city]
 
     # Normalize: strip 市/区/县/镇/乡
     base = normalize_city_name(city)
@@ -551,31 +582,23 @@ def _check_api_response(data, context: str = "API"):
 def fetch_weather(city: str, units: str = "metric") -> Dict[str, Any]:
     """
     Fetch current weather from OpenWeatherMap.
-    Priority: local China-locations match → Geocoding API → city-name query.
-    Supports fuzzy pinyin input (e.g. "chaoyang", "linzi").
+    Priority:
+      1) Match against local China districts/counties (区/县) → use coordinates
+      2) Resolve city name (Chinese→English) → use city-name API
+         (covers both Chinese and international cities)
+    Supports fuzzy pinyin input for district-level queries (e.g. "linzi", "chaoyang").
     """
     api_key = load_api_key()
 
-    # ── 1. Local China-locations matching (district / pinyin / fuzzy) ──
-    location = find_best_match(city)
-    if location:
-        result = fetch_weather_by_coords(location["lat"], location["lon"], units)
-        result["city"] = location["name"]
+    # ── 1. District/county match (local DB, supports pinyin/fuzzy) ──
+    district = find_best_district_match(city)
+    if district:
+        result = fetch_weather_by_coords(district["lat"], district["lon"], units)
+        result["city"] = district["name"]
         return result
 
-    # ── 2. Chinese input: fallback to Geocoding API ──────────────────
+    # ── 2. City-name API (Chinese cities resolved to English first) ──
     if _is_chinese(city):
-        if city in SPECIAL_CASES:
-            return _fetch_weather_by_name(SPECIAL_CASES[city], units, api_key)
-
-        geo = _geo_lookup(normalize_city_name(city), api_key)
-        if geo:
-            lat, lon, _eng, cn_name = geo
-            result = fetch_weather_by_coords(lat, lon, units)
-            if cn_name:
-                result["city"] = cn_name
-            return result
-
         resolved = resolve_city_name(city)
     else:
         resolved = city
