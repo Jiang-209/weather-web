@@ -32,6 +32,20 @@ if _key_preview:
 else:
     print(f"[weather] No API key found in {dotenv_path.name}")
 
+# Debug flag and counter for raw API response logging
+_DEBUG = os.getenv("FLASK_DEBUG", "0") == "1"
+_debug_req_count = 0
+
+
+def _log_raw_response(context: str, data):
+    """Print raw API response type and preview (first 5 requests only)."""
+    global _debug_req_count
+    if not _DEBUG or _debug_req_count >= 5:
+        _debug_req_count += 1  # still increment to avoid counting issues
+        return
+    _debug_req_count += 1
+    print(f"[debug] [{context}] type={type(data).__name__}, preview={str(data)[:200]}")
+
 # ── Chinese → English city name mapping ──────────────────────────
 CITY_NAME_MAP: Dict[str, str] = {
     # 中国主要城市
@@ -256,8 +270,10 @@ def resolve_city_name(city: str) -> str:
         )
         resp.raise_for_status()
         results = resp.json()
-        if results:
-            return results[0].get("name", city)
+        if isinstance(results, list) and results:
+            entry = results[0]
+            if isinstance(entry, dict):
+                return entry.get("name", city)
     except Exception:
         pass
 
@@ -304,8 +320,19 @@ def load_api_key() -> str:
     return api_key
 
 
-def _check_api_response(data: dict, context: str = "API"):
-    """Check OpenWeatherMap response for errors, with specific 401 handling."""
+def _check_api_response(data, context: str = "API"):
+    """Check OpenWeatherMap response for errors, with specific 401 handling.
+
+    Validates that data is a dict before accessing fields, to avoid
+    ``list indices must be integers or slices, not str`` when the API
+    returns an unexpected format (e.g. list, gateway error page).
+    """
+    if not isinstance(data, dict):
+        raise Exception(
+            f"Unexpected API response format: expected a JSON object, "
+            f"got {type(data).__name__}. "
+            f"Raw preview: {str(data)[:200]}"
+        )
     cod = data.get("cod")
     if cod and str(cod) != "200":
         msg = data.get("message", "Unknown error")
@@ -351,6 +378,7 @@ def fetch_weather(city: str, units: str = "metric") -> Dict[str, Any]:
     try:
         response = requests.get(API_BASE_URL, params=params, timeout=10)
         data = response.json()
+        _log_raw_response("weather", data)
 
         # Check for API errors (e.g., city not found, invalid API key)
         _check_api_response(data)
@@ -368,10 +396,32 @@ def fetch_weather(city: str, units: str = "metric") -> Dict[str, Any]:
 
 def parse_weather_data(data: Dict[str, Any], units: str) -> Dict[str, Any]:
     """Parse API response into a structured format"""
+    if not isinstance(data, dict):
+        raise Exception(f"Cannot parse weather data: expected dict, got {type(data).__name__}")
+
     main = data.get("main", {})
-    weather = data.get("weather", [{}])[0]
+    if not isinstance(main, dict):
+        main = {}
+
+    weather_list = data.get("weather", [])
+    if not isinstance(weather_list, list) or not weather_list:
+        weather = {}
+    else:
+        weather = weather_list[0]
+    if not isinstance(weather, dict):
+        weather = {}
+
     wind = data.get("wind", {})
+    if not isinstance(wind, dict):
+        wind = {}
+
     sys_data = data.get("sys", {})
+    if not isinstance(sys_data, dict):
+        sys_data = {}
+
+    clouds = data.get("clouds", {})
+    if not isinstance(clouds, dict):
+        clouds = {}
 
     # Determine units for display
     if units == "metric":
@@ -398,7 +448,7 @@ def parse_weather_data(data: Dict[str, Any], units: str) -> Dict[str, Any]:
         "wind_unit": wind_unit,
         "wind_direction": wind.get("deg", 0),
         "visibility": data.get("visibility"),
-        "clouds": data.get("clouds", {}).get("all", 0),
+        "clouds": clouds.get("all", 0),
         "sunrise": sys_data.get("sunrise"),
         "sunset": sys_data.get("sunset"),
         "timestamp": data.get("dt"),
@@ -449,6 +499,7 @@ def fetch_weather_by_coords(lat: float, lon: float, units: str = "metric") -> Di
     try:
         resp = requests.get(API_BASE_URL, params=params, timeout=10)
         data = resp.json()
+        _log_raw_response("weather", data)
         _check_api_response(data)
         resp.raise_for_status()
         result = parse_weather_data(data, units)
@@ -456,6 +507,8 @@ def fetch_weather_by_coords(lat: float, lon: float, units: str = "metric") -> Di
         return result
     except requests.exceptions.RequestException as e:
         raise Exception(f"Network error: {e}")
+    except ValueError as e:
+        raise Exception(f"Invalid response from weather API: {e}")
 
 
 def fetch_forecast_by_coords(lat: float, lon: float, units: str = "metric") -> List[Dict[str, Any]]:
@@ -474,13 +527,21 @@ def fetch_forecast_by_coords(lat: float, lon: float, units: str = "metric") -> L
             timeout=10,
         )
         data = resp.json()
+        _log_raw_response("forecast", data)
         _check_api_response(data, context="Forecast")
         resp.raise_for_status()
     except requests.exceptions.RequestException as e:
         raise Exception(f"Network error fetching forecast: {e}")
+    except ValueError as e:
+        raise Exception(f"Invalid response from forecast API: {e}")
 
-    tz_offset = data.get("city", {}).get("timezone", 0)
-    result = _build_daily_forecasts(data.get("list", []), units, tz_offset)
+    # Defensive parse: validate city / list fields before use
+    city_info = data.get("city", {})
+    tz_offset = city_info.get("timezone", 0) if isinstance(city_info, dict) else 0
+    forecast_list = data.get("list", [])
+    if not isinstance(forecast_list, list):
+        forecast_list = []
+    result = _build_daily_forecasts(forecast_list, units, tz_offset)
     _cache_set(cache_key, result, CACHE_TTL_FORECAST)
     return result
 
@@ -506,15 +567,22 @@ def fetch_forecast(city: str, units: str = "metric") -> List[Dict[str, Any]]:
     try:
         resp = requests.get(FORECAST_BASE_URL, params=params, timeout=10)
         data = resp.json()
+        _log_raw_response("forecast", data)
 
         _check_api_response(data, context="Forecast")
 
         resp.raise_for_status()
     except requests.exceptions.RequestException as e:
         raise Exception(f"Network error fetching forecast: {e}")
+    except ValueError as e:
+        raise Exception(f"Invalid response from forecast API: {e}")
 
-    timezone_offset = data.get("city", {}).get("timezone", 0)
-    result = _build_daily_forecasts(data.get("list", []), units, timezone_offset)
+    city_info = data.get("city", {})
+    timezone_offset = city_info.get("timezone", 0) if isinstance(city_info, dict) else 0
+    forecast_list = data.get("list", [])
+    if not isinstance(forecast_list, list):
+        forecast_list = []
+    result = _build_daily_forecasts(forecast_list, units, timezone_offset)
     _cache_set(cache_key, result, CACHE_TTL_FORECAST)
     return result
 
@@ -540,9 +608,17 @@ def _build_daily_forecasts(
     target_hour = 12  # prefer entries near midday
 
     for entry in entries:
+        # Safeguard: skip non-dict entries (e.g. list with strings)
+        if not isinstance(entry, dict):
+            continue
+
+        dt_val = entry.get("dt")
+        if dt_val is None:
+            continue
+
         # Convert to local datetime
         local_dt = datetime.fromtimestamp(
-            entry["dt"] + tz_offset, tz=timezone.utc
+            dt_val + tz_offset, tz=timezone.utc
         )
 
         # Skip entries whose local time is already past
@@ -553,7 +629,17 @@ def _build_daily_forecasts(
         hour = local_dt.hour
 
         main = entry.get("main", {})
-        weather = entry.get("weather", [{}])[0]
+        if not isinstance(main, dict):
+            main = {}
+
+        weather_list = entry.get("weather", [])
+        if not isinstance(weather_list, list) or not weather_list:
+            weather = {}
+        else:
+            weather = weather_list[0]
+        if not isinstance(weather, dict):
+            weather = {}
+
         temp = main.get("temp", 0)
         icon = weather.get("icon", "01d")
         desc = _translate_desc(weather.get("description", ""))

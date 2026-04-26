@@ -95,6 +95,10 @@
      ================================================================ */
 
   function renderWeather(data) {
+    if (!data || !data.current) {
+      showError("返回数据异常：缺少天气数据。");
+      return;
+    }
     var current = data.current;
 
     document.getElementById("w-city").textContent = current.city;
@@ -124,7 +128,7 @@
   }
 
   function renderForecast(list) {
-    if (!list || list.length === 0) {
+    if (!list || !Array.isArray(list) || list.length === 0) {
       forecastSection.classList.remove("active");
       return;
     }
@@ -186,6 +190,10 @@
         return res.json();
       })
       .then(function (json) {
+        if (!json || typeof json !== "object") {
+          showError("服务器返回异常数据格式。");
+          return;
+        }
         if (!json.success) {
           showError(json.error || "未知错误");
           return;
