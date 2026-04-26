@@ -2,15 +2,17 @@
 Weather API utilities - current weather + 5-day forecast
 """
 
+import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from difflib import get_close_matches
 from pathlib import Path
 from typing import Any, Dict, List
-from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
+from pypinyin import lazy_pinyin
 
 # Load .env from the project root; fallback to .env.backup if .env doesn't exist
 _base_dir = Path(__file__).resolve().parent
@@ -152,6 +154,43 @@ CITY_NAME_MAP: Dict[str, str] = {
 # ── English → Chinese city name mapping (generated from CITY_NAME_MAP) ──
 EN_TO_CN: Dict[str, str] = {v: k for k, v in CITY_NAME_MAP.items() if v}
 
+# ── Local China district data (loaded at startup) ──────────────────
+_data_path = Path(__file__).resolve().parent / "data" / "china_locations.json"
+try:
+    with open(_data_path, "r", encoding="utf-8") as _f:
+        CHINA_LOCATIONS: List[Dict] = json.load(_f)
+    print(f"[weather] Loaded {len(CHINA_LOCATIONS)} local China locations")
+except Exception:
+    CHINA_LOCATIONS = []
+
+# Built lazily on first call to find_best_match()
+_location_index: Dict[str, int] = {}
+_location_pinyin_idx: Dict[str, int] = {}
+_location_names: List[str] = []
+_built = False
+
+
+def _build_index():
+    """Precompute name→idx and pinyin→idx for O(1) lookup."""
+    global _built, _location_index, _location_pinyin_idx, _location_names
+    if _built:
+        return
+    _location_index.clear()
+    _location_pinyin_idx.clear()
+    _location_names.clear()
+    for i, loc in enumerate(CHINA_LOCATIONS):
+        n = loc.get("name", "")
+        _location_names.append(n)
+        _location_index[n] = i
+        # Also index the normalized (suffix-stripped) form
+        n_norm = normalize_city_name(n)
+        if n_norm != n:
+            _location_index[n_norm] = i
+        # Pinyin index
+        py = "".join(lazy_pinyin(n))
+        _location_pinyin_idx[py] = i
+    _built = True
+
 # ── In-memory cache ───────────────────────────────────────────────
 import copy as _copy
 
@@ -275,6 +314,89 @@ def _translate_desc(desc_en: str) -> str:
     """Translate English weather description to Chinese."""
     key = desc_en.strip().lower()
     return WEATHER_DESC_CN.get(key, desc_en)
+
+
+# ── Pinyin & fuzzy matching helpers ───────────────────────────────
+
+def normalize_input(text: str) -> str:
+    """Strip spaces, lowercase, and remove administrative suffixes."""
+    text = text.strip().lower()
+    for suffix in ("市", "区", "县", "镇", "乡"):
+        if text.endswith(suffix) and len(text) > 2:
+            text = text[:-1]
+            break
+    return text
+
+
+def to_pinyin(text: str) -> str:
+    """Convert Chinese text to pinyin (no spaces)."""
+    return "".join(lazy_pinyin(text))
+
+
+def find_best_match(user_input: str):
+    """
+    Match user input against the local China locations database.
+    Matches in priority order:
+      1) Exact match on name
+      2) Contains match (input is substring of name)
+      3) Exact match after normalizing input (strip suffix)
+      4) Exact pinyin match
+      5) difflib fuzzy match (cutoff 0.6)
+
+    Returns the matched location dict or None if no match found.
+    """
+    if not CHINA_LOCATIONS:
+        return None
+
+    _build_index()
+    raw = user_input.strip()
+
+    # ① Exact match
+    idx = _location_index.get(raw)
+    if idx is not None:
+        return CHINA_LOCATIONS[idx]
+
+    # ② Contains match (e.g. "朝阳" in "朝阳区")
+    for i, name in enumerate(_location_names):
+        if raw in name:
+            return CHINA_LOCATIONS[i]
+
+    # ③ Normalized match (strip suffix from input)
+    norm = normalize_input(raw)
+    if norm != raw:
+        idx = _location_index.get(norm)
+        if idx is not None:
+            return CHINA_LOCATIONS[idx]
+
+    # ④ Exact pinyin match
+    input_py = to_pinyin(raw)  # e.g. "chaoyangqu" → "chaoyangqu"
+    input_py_normalized = to_pinyin(norm)  # e.g. "chaoyang"
+    idx = _location_pinyin_idx.get(input_py)
+    if idx is None:
+        idx = _location_pinyin_idx.get(input_py_normalized)
+    if idx is not None:
+        return CHINA_LOCATIONS[idx]
+
+    # ⑤ difflib fuzzy match (try against raw names and pinyin)
+    # Build candidate list: raw name + pinyin for each location
+    candidates = []
+    for name in _location_names:
+        candidates.append(name)
+    close = get_close_matches(raw, candidates, n=1, cutoff=0.6)
+    if close:
+        idx = _location_index.get(close[0])
+        if idx is not None:
+            return CHINA_LOCATIONS[idx]
+
+    # Also try fuzzy against pinyin
+    pinyin_candidates = list(_location_pinyin_idx.keys())
+    close_py = get_close_matches(input_py, pinyin_candidates, n=1, cutoff=0.6)
+    if close_py:
+        idx = _location_pinyin_idx.get(close_py[0])
+        if idx is not None:
+            return CHINA_LOCATIONS[idx]
+
+    return None
 
 
 # ── Chinese name normalization & special-case corrections ────────
@@ -428,28 +550,32 @@ def _check_api_response(data, context: str = "API"):
 
 def fetch_weather(city: str, units: str = "metric") -> Dict[str, Any]:
     """
-    Fetch current weather for a city from OpenWeatherMap API.
-    Uses Geocoding API → coords for Chinese input (more reliable for districts).
+    Fetch current weather from OpenWeatherMap.
+    Priority: local China-locations match → Geocoding API → city-name query.
+    Supports fuzzy pinyin input (e.g. "chaoyang", "linzi").
     """
     api_key = load_api_key()
 
-    # ── Chinese input: prefer Geocoding API → coords ──────────────
-    if _is_chinese(city):
-        # SPECIAL_CASES override: skip Geocoding, use corrected name directly
-        if city in SPECIAL_CASES:
-            resolved = SPECIAL_CASES[city]
-            return _fetch_weather_by_name(resolved, units, api_key)
+    # ── 1. Local China-locations matching (district / pinyin / fuzzy) ──
+    location = find_best_match(city)
+    if location:
+        result = fetch_weather_by_coords(location["lat"], location["lon"], units)
+        result["city"] = location["name"]
+        return result
 
-        normalized = normalize_city_name(city)
-        geo = _geo_lookup(normalized, api_key)
+    # ── 2. Chinese input: fallback to Geocoding API ──────────────────
+    if _is_chinese(city):
+        if city in SPECIAL_CASES:
+            return _fetch_weather_by_name(SPECIAL_CASES[city], units, api_key)
+
+        geo = _geo_lookup(normalize_city_name(city), api_key)
         if geo:
-            lat, lon, eng_name, cn_name = geo
+            lat, lon, _eng, cn_name = geo
             result = fetch_weather_by_coords(lat, lon, units)
             if cn_name:
                 result["city"] = cn_name
             return result
 
-        # Geocoding failed → fallback to name-based query
         resolved = resolve_city_name(city)
     else:
         resolved = city
