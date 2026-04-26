@@ -153,6 +153,8 @@ CITY_NAME_MAP: Dict[str, str] = {
 EN_TO_CN: Dict[str, str] = {v: k for k, v in CITY_NAME_MAP.items() if v}
 
 # ── In-memory cache ───────────────────────────────────────────────
+import copy as _copy
+
 _cache: Dict[str, Dict[str, Any]] = {}
 
 CACHE_TTL_WEATHER = 600       # 10 minutes
@@ -162,16 +164,46 @@ CACHE_TTL_FORECAST = 1800     # 30 minutes
 def _cache_get(key: str):
     entry = _cache.get(key)
     if entry and entry["expires"] > datetime.now().timestamp():
-        return entry["data"]
+        data = entry["data"]
+        _log_cache("HIT", key, data)
+        # Return a deep copy so callers can mutate freely without
+        # contaminating the cached value (avoids the "first OK,
+        # second crash" pattern caused by _cached / sunrise_str /
+        # sunset_str mutations leaking into the cache store).
+        return _copy.deepcopy(data)
+    _log_cache("MISS", key)
     return None
 
 
 def _cache_set(key: str, data: Any, ttl: int):
-    _cache[key] = {"data": data, "expires": datetime.now().timestamp() + ttl}
+    # Store a deep copy so later mutations of the original object
+    # (e.g. in app.py route handlers) don't corrupt the cache entry.
+    _cache[key] = {"data": _copy.deepcopy(data), "expires": datetime.now().timestamp() + ttl}
+    _log_cache("SET", key, data)
 
 
 def _cache_key(*parts: str) -> str:
     return ":".join(parts).lower()
+
+
+_DEBUG_CACHE = os.getenv("FLASK_DEBUG", "0") == "1"
+_cache_hit_count = 0
+
+
+def _log_cache(event: str, key: str, data=None):
+    global _cache_hit_count
+    if not _DEBUG_CACHE:
+        return
+    _cache_hit_count += 1
+    if data is not None:
+        print(f"[cache] {event} key={key} type={type(data).__name__}")
+    else:
+        print(f"[cache] {event} key={key}")
+
+
+# Purge any stale cache entries leftover from a previous module lifetime
+# (e.g. gunicorn preload, hot-reload, or dev server restart).
+_cache.clear()
 
 
 def _lookup_cn_name(en_name: str) -> str:
@@ -366,7 +398,11 @@ def fetch_weather(city: str, units: str = "metric") -> Dict[str, Any]:
     cache_key = _cache_key(resolved, units, "weather")
     cached = _cache_get(cache_key)
     if cached:
-        cached["_cached"] = True
+        if not isinstance(cached, dict):
+            raise Exception(
+                f"Cache contamination: expected dict for weather key "
+                f"'{cache_key}', got {type(cached).__name__}"
+            )
         return cached
 
     params = {
@@ -492,7 +528,11 @@ def fetch_weather_by_coords(lat: float, lon: float, units: str = "metric") -> Di
     cache_key = _cache_key(str(lat), str(lon), units, "weather")
     cached = _cache_get(cache_key)
     if cached:
-        cached["_cached"] = True
+        if not isinstance(cached, dict):
+            raise Exception(
+                f"Cache contamination: expected dict for weather key "
+                f"'{cache_key}', got {type(cached).__name__}"
+            )
         return cached
 
     params = {"lat": lat, "lon": lon, "appid": api_key, "units": units}
@@ -517,7 +557,11 @@ def fetch_forecast_by_coords(lat: float, lon: float, units: str = "metric") -> L
     cache_key = _cache_key(str(lat), str(lon), units, "forecast")
     cached = _cache_get(cache_key)
     if cached:
-        cached["_cached"] = True
+        if not isinstance(cached, list):
+            raise Exception(
+                f"Cache contamination: expected list for forecast key "
+                f"'{cache_key}', got {type(cached).__name__}"
+            )
         return cached
 
     try:
@@ -560,6 +604,11 @@ def fetch_forecast(city: str, units: str = "metric") -> List[Dict[str, Any]]:
     cache_key = _cache_key(resolved, units, "forecast")
     cached = _cache_get(cache_key)
     if cached:
+        if not isinstance(cached, list):
+            raise Exception(
+                f"Cache contamination: expected list for forecast key "
+                f"'{cache_key}', got {type(cached).__name__}"
+            )
         return cached
 
     params = {"q": resolved, "appid": api_key, "units": units}
