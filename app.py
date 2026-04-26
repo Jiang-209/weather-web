@@ -2,7 +2,6 @@
 
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -19,11 +18,6 @@ if not _dotenv_path.exists():
 load_dotenv(dotenv_path=_dotenv_path, override=True)
 
 app = Flask(__name__)
-
-
-def _format_timestamp(ts: int) -> str:
-    """Convert UNIX timestamp to hour string."""
-    return datetime.fromtimestamp(ts).strftime("%H:%M")
 
 
 @app.route("/")
@@ -47,10 +41,6 @@ def weather_api():
     except Exception as e:
         return jsonify(success=False, error=str(e)), 400
 
-    # Format timestamps
-    current["sunrise_str"] = _format_timestamp(current.get("sunrise", 0))
-    current["sunset_str"] = _format_timestamp(current.get("sunset", 0))
-
     return jsonify(success=True, current=current, forecast=forecast_list)
 
 
@@ -70,9 +60,6 @@ def weather_api_by_coords():
         forecast_list = fetch_forecast_by_coords(lat, lon, units)
     except Exception as e:
         return jsonify(success=False, error=str(e)), 400
-
-    current["sunrise_str"] = _format_timestamp(current.get("sunrise", 0))
-    current["sunset_str"] = _format_timestamp(current.get("sunset", 0))
 
     return jsonify(success=True, current=current, forecast=forecast_list)
 

@@ -277,23 +277,37 @@ def _translate_desc(desc_en: str) -> str:
     return WEATHER_DESC_CN.get(key, desc_en)
 
 
-def resolve_city_name(city: str) -> str:
-    """
-    Resolve a city name to its English form.
-    Chinese names are looked up via CITY_NAME_MAP first,
-    then fall back to the OpenWeatherMap Geocoding API.
-    """
-    # Not Chinese — return as-is
-    if not any("一" <= ch <= "鿿" or "　" <= ch <= "〿" or
-               "＀" <= ch <= "￯" for ch in city):
-        return city
+# ── Chinese name normalization & special-case corrections ────────
 
-    # 1. Built-in mapping
-    if city in CITY_NAME_MAP:
-        return CITY_NAME_MAP[city]
+# Suffixes to strip for district-level matching
+_CITY_SUFFIXES = ("市", "区", "县", "镇", "乡")
 
-    # 2. Geocoding API fallback
-    api_key = load_api_key()
+# Override wrong OpenWeatherMap mappings (e.g. 临淄 → Linz)
+# Key = user input, Value = correct English city name for the weather API
+SPECIAL_CASES: Dict[str, str] = {
+    "临淄": "Zibo",
+    "临淄区": "Zibo",
+}
+
+
+def _is_chinese(text: str) -> bool:
+    """Return True if text contains CJK characters."""
+    return any("一" <= ch <= "鿿" or
+               "　" <= ch <= "〿" or
+               "＀" <= ch <= "﻿" for ch in text)
+
+
+def normalize_city_name(name: str) -> str:
+    """Strip common administrative suffixes from a Chinese city name."""
+    for suffix in _CITY_SUFFIXES:
+        if name.endswith(suffix) and len(name) > 2:
+            return name[:-1]
+    return name
+
+
+def _geo_lookup(city: str, api_key: str):
+    """Call OpenWeatherMap Geocoding API and return (lat, lon, eng_name, cn_name)
+    or None on failure."""
     try:
         resp = requests.get(
             GEO_BASE_URL,
@@ -305,11 +319,45 @@ def resolve_city_name(city: str) -> str:
         if isinstance(results, list) and results:
             entry = results[0]
             if isinstance(entry, dict):
-                return entry.get("name", city)
+                lat = entry.get("lat")
+                lon = entry.get("lon")
+                eng_name = entry.get("name", "")
+                # Prefer Chinese local_name if available
+                local_names = entry.get("local_names", {}) or {}
+                cn_name = local_names.get("zh", "") or ""
+                return (lat, lon, eng_name, cn_name)
     except Exception:
         pass
+    return None
 
-    # Return original — let the weather API return the error
+
+def resolve_city_name(city: str) -> str:
+    """
+    Resolve a Chinese city name to its English form.
+    Priority: SPECIAL_CASES > CITY_NAME_MAP > Geocoding API.
+    """
+    if not _is_chinese(city):
+        return city
+
+    # 0. Special-case correction (override wrong mappings)
+    if city in SPECIAL_CASES:
+        return SPECIAL_CASES[city]
+
+    # Normalize: strip 市/区/县/镇/乡
+    base = normalize_city_name(city)
+
+    # 1. Built-in mapping (try normalized first, then original)
+    if base in CITY_NAME_MAP:
+        return CITY_NAME_MAP[base]
+    if city in CITY_NAME_MAP:
+        return CITY_NAME_MAP[city]
+
+    # 2. Geocoding API fallback
+    api_key = load_api_key()
+    geo = _geo_lookup(city, api_key)
+    if geo:
+        return geo[2]  # eng_name
+
     return city
 
 
@@ -380,21 +428,37 @@ def _check_api_response(data, context: str = "API"):
 
 def fetch_weather(city: str, units: str = "metric") -> Dict[str, Any]:
     """
-    Fetch current weather for a city from OpenWeatherMap API
-
-    Args:
-        city: City name
-        units: Temperature units - "metric" (Celsius) or "imperial" (Fahrenheit)
-
-    Returns:
-        Dictionary containing weather data
-
-    Raises:
-        Exception: If API request fails or city not found
+    Fetch current weather for a city from OpenWeatherMap API.
+    Uses Geocoding API → coords for Chinese input (more reliable for districts).
     """
     api_key = load_api_key()
-    resolved = resolve_city_name(city)
 
+    # ── Chinese input: prefer Geocoding API → coords ──────────────
+    if _is_chinese(city):
+        # SPECIAL_CASES override: skip Geocoding, use corrected name directly
+        if city in SPECIAL_CASES:
+            resolved = SPECIAL_CASES[city]
+            return _fetch_weather_by_name(resolved, units, api_key)
+
+        normalized = normalize_city_name(city)
+        geo = _geo_lookup(normalized, api_key)
+        if geo:
+            lat, lon, eng_name, cn_name = geo
+            result = fetch_weather_by_coords(lat, lon, units)
+            if cn_name:
+                result["city"] = cn_name
+            return result
+
+        # Geocoding failed → fallback to name-based query
+        resolved = resolve_city_name(city)
+    else:
+        resolved = city
+
+    return _fetch_weather_by_name(resolved, units, api_key)
+
+
+def _fetch_weather_by_name(resolved: str, units: str, api_key: str) -> Dict[str, Any]:
+    """Weather lookup by city name (fallback path)."""
     cache_key = _cache_key(resolved, units, "weather")
     cached = _cache_get(cache_key)
     if cached:
@@ -405,25 +469,16 @@ def fetch_weather(city: str, units: str = "metric") -> Dict[str, Any]:
             )
         return cached
 
-    params = {
-        "q": resolved,
-        "appid": api_key,
-        "units": units,
-    }
-
+    params = {"q": resolved, "appid": api_key, "units": units}
     try:
-        response = requests.get(API_BASE_URL, params=params, timeout=10)
-        data = response.json()
+        resp = requests.get(API_BASE_URL, params=params, timeout=10)
+        data = resp.json()
         _log_raw_response("weather", data)
-
-        # Check for API errors (e.g., city not found, invalid API key)
         _check_api_response(data)
-
-        response.raise_for_status()
+        resp.raise_for_status()
         result = parse_weather_data(data, units)
         _cache_set(cache_key, result, CACHE_TTL_WEATHER)
         return result
-
     except requests.exceptions.RequestException as e:
         raise Exception(f"Network error: {e}")
     except ValueError as e:
@@ -470,6 +525,19 @@ def parse_weather_data(data: Dict[str, Any], units: str) -> Dict[str, Any]:
         temp_unit = "K"
         wind_unit = "m/s"
 
+    # ── Convert UTC timestamps to local time using city timezone offset ──
+    tz_offset = data.get("timezone", 0)  # seconds from UTC
+    if isinstance(tz_offset, (int, float)) and tz_offset != 0:
+        _to_local = lambda ts: (
+            datetime.fromtimestamp(ts + tz_offset, tz=timezone.utc).strftime("%H:%M")
+            if ts else "N/A"
+        )
+        sunrise_str = _to_local(sys_data.get("sunrise"))
+        sunset_str = _to_local(sys_data.get("sunset"))
+    else:
+        sunrise_str = "N/A"
+        sunset_str = "N/A"
+
     return {
         "city": _lookup_cn_name(data.get("name", "Unknown")),
         "country": sys_data.get("country", "Unknown"),
@@ -487,6 +555,8 @@ def parse_weather_data(data: Dict[str, Any], units: str) -> Dict[str, Any]:
         "clouds": clouds.get("all", 0),
         "sunrise": sys_data.get("sunrise"),
         "sunset": sys_data.get("sunset"),
+        "sunrise_str": sunrise_str,
+        "sunset_str": sunset_str,
         "timestamp": data.get("dt"),
     }
 
