@@ -423,14 +423,14 @@ def find_best_district_match(user_input: str):
         return CHINA_LOCATIONS[idx]
 
     # ⑤ difflib fuzzy match (against names)
-    close = get_close_matches(raw, _district_names, n=1, cutoff=0.6)
+    close = get_close_matches(raw, _district_names, n=1, cutoff=0.75)
     if close:
         idx = _district_index.get(close[0])
         if idx is not None:
             return CHINA_LOCATIONS[idx]
 
     # ⑥ difflib fuzzy match (against full pinyin only, higher cutoff to avoid false matches)
-    close_py = get_close_matches(input_py, list(_district_pinyin_idx.keys()), n=1, cutoff=0.8)
+    close_py = get_close_matches(input_py, list(_district_pinyin_idx.keys()), n=1, cutoff=0.85)
     if close_py:
         idx = _district_pinyin_idx.get(close_py[0])
         if idx is not None:
@@ -583,21 +583,30 @@ def fetch_weather(city: str, units: str = "metric") -> Dict[str, Any]:
     """
     Fetch current weather from OpenWeatherMap.
     Priority:
-      1) Match against local China districts/counties (区/县) → use coordinates
-      2) Resolve city name (Chinese→English) → use city-name API
-         (covers both Chinese and international cities)
+      1) Known Chinese city (in CITY_NAME_MAP) → resolve name directly.
+         This prevents district-level fuzzy matching from hijacking
+         major cities (e.g. 广州→黄州区, 杭州→长洲区, 旧金山→金山区).
+      2) Match against local China districts/counties (区/县) → use coordinates
+      3) Resolve city name (Chinese→English) → use city-name API
     Supports fuzzy pinyin input for district-level queries (e.g. "linzi", "chaoyang").
     """
     api_key = load_api_key()
 
-    # ── 1. District/county match (local DB, supports pinyin/fuzzy) ──
+    # ── 1. Known Chinese city: resolve directly ──────────────────
+    if _is_chinese(city):
+        base = normalize_city_name(city)
+        if city in CITY_NAME_MAP or base in CITY_NAME_MAP:
+            resolved = resolve_city_name(city)
+            return _fetch_weather_by_name(resolved, units, api_key)
+
+    # ── 2. District/county match (local DB, supports pinyin/fuzzy) ──
     district = find_best_district_match(city)
     if district:
         result = fetch_weather_by_coords(district["lat"], district["lon"], units)
         result["city"] = district["name"]
         return result
 
-    # ── 2. City-name API (Chinese cities resolved to English first) ──
+    # ── 3. City-name API (Chinese cities resolved to English first) ──
     if _is_chinese(city):
         resolved = resolve_city_name(city)
     else:
