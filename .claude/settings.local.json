@@ -37,7 +37,13 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:xiangyuecn.github.io)",
       "Bash(curl -sL -o ok_data.7z \"https://github.com/xiangyuecn/AreaCity-JsSpider-StatsGov/releases/download/2025.251231.260403/ok_data_level3-4.csv.7z\")",
-      "Bash(echo \"Replaced: $\\(python -c \"import json; print\\(len\\(json.load\\(open\\('E:/weather-cli/data/china_locations.json','r',encoding='utf-8'\\)\\)\\)\\)\"\\) entries\")"
+      "Bash(echo \"Replaced: $\\(python -c \"import json; print\\(len\\(json.load\\(open\\('E:/weather-cli/data/china_locations.json','r',encoding='utf-8'\\)\\)\\)\\)\"\\) entries\")",
+      "Bash(systeminfo)",
+      "Bash(findstr /B /C:\"OS Name\" /C:\"OS Version\" /C:\"System Type\")",
+      "Bash(powershell *)",
+      "Bash(powershell.exe -Command \"\\(Get-WmiObject Win32_OperatingSystem\\).Caption\")",
+      "Bash(cmd.exe /c \"ver\")",
+      "Bash(powershell.exe -Command \"Get-WindowsOptionalFeature -Online -FeatureName 'Containers-DisposableClientVM' | Format-List FeatureName,State\")"
     ]
   }
 }
